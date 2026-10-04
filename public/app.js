@@ -424,17 +424,18 @@ function batchDetailRow(b) {
   }).join('') || '<tr><td colspan="4" class="empty">没有断链缺口</td></tr>';
 
   const check = d.releaseCheck || {};
-  const conds = (check.conditions || []).slice();
+  // 四条判定全部来自服务端（含探头校准条），前端只渲染、不自行补条或重算
+  const conds = check.conditions || [];
   const expired = check.expiredProbes || [];
-  conds.push({ key: 'calibration', ok: expired.length === 0, value: expired.length, limit: 0, text: '参与判定的探头都在校准有效期内' });
   const condHtml = conds.map(function (c) {
     return '<li><span class="cond-text">' + okPill(c.ok) + ' ' + esc(c.text) + '</span>' +
       '<span class="cond-meta">实际 ' + esc(c.value) + '，阈值 ' + esc(c.limit) + '</span></li>';
   }).join('');
 
   const expiredProbes = expired.map(function (p) {
-    return '<tr><td>' + esc(p.probeCode) + '</td><td>' + esc(p.calibratedUntil) + '</td><td>' + esc(p.at) + '</td></tr>';
-  }).join('') || '<tr><td colspan="3" class="empty">没有已过校准期的探头</td></tr>';
+    return '<tr><td>' + esc(p.probeCode) + '</td><td>' + esc(p.calibratedUntil) + '</td><td>' +
+      esc(p.from) + ' 至 ' + esc(p.to) + '</td><td class="num">' + num(p.count) + '</td></tr>';
+  }).join('') || '<tr><td colspan="4" class="empty">没有已过校准期的探头</td></tr>';
 
   const releases = (d.releases || []).map(function (r) {
     return '<tr><td>' + esc(r.decision) + '</td><td>' + esc(r.decidedAt) + '</td><td>' + esc(r.decider) + '</td>' +
@@ -447,6 +448,12 @@ function batchDetailRow(b) {
     '<button type="button" class="btn btn-danger" data-action="batch-del" data-id="' + esc(b.id) + '">删除</button>' +
     '</div>';
 
+  const verdict = check.pass === true
+    ? '<span class="cond-verdict">判定结论：' + pill('满足放行条件', 'pill-ok') + '</span>'
+    : '<span class="cond-verdict">判定结论：' + pill('不满足放行条件', 'pill-bad') +
+      (check.noRecords ? '<span class="cond-meta">该批次没有任何温度记录，按口径不能放行</span>' : '') +
+      '</span>';
+
   return '<tr class="row-detail"><td colspan="13">' +
     '<div class="detail-grid">' +
     '<div class="detail-block"><h4>温度记录（' + (d.records || []).length + '）</h4>' +
@@ -454,9 +461,9 @@ function batchDetailRow(b) {
     '<div class="detail-block"><h4>超限段（' + (d.segments || []).length + '）</h4>' + segmentsHtml +
     '<h4>断链缺口（' + (d.chainGaps || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>起</th><th>止</th><th class="num">实际(分)</th><th class="num">计入(分)</th></tr></thead><tbody>' + gaps + '</tbody></table></div>' +
-    '<div class="detail-block"><h4>放行判定</h4><ul class="cond-list">' + condHtml + '</ul>' +
+    '<div class="detail-block"><h4>放行判定（' + conds.length + ' 项）</h4><ul class="cond-list">' + condHtml + '</ul>' + verdict +
     '<h4>已过校准期的探头（' + expired.length + '）</h4>' +
-    '<table class="mini-table"><thead><tr><th>探头</th><th>校准有效期</th><th>记录时刻</th></tr></thead><tbody>' + expiredProbes + '</tbody></table></div>' +
+    '<table class="mini-table"><thead><tr><th>探头</th><th>校准有效期</th><th>记录时段</th><th class="num">记录条数</th></tr></thead><tbody>' + expiredProbes + '</tbody></table></div>' +
     '<div class="detail-block"><h4>放行记录（' + (d.releases || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>决定</th><th>时刻</th><th>经办人</th><th class="num">MKT</th><th>依据</th></tr></thead><tbody>' + releases + '</tbody></table>' +
     decisionBtns + '</div>' +
@@ -476,8 +483,8 @@ async function expandBatch(id) {
       detail = results[0];
       records = results[1] || [];
     } catch (err) {
-      /* 服务端 /api/batches/:id 在有记录时会 500（coldlib.probeOf 未导出），
-         这里退回可用的接口拼出详情，保证页面不空着、并如实显示报错。 */
+      /* 批次详情接口万一不可用，退回 release-check / records / releases 三个接口拼出详情，
+         保证页面不空着、并如实显示报错（超限段会标为读不到）。 */
       detailError = err;
       const fallback = await Promise.all([
         api('GET', '/api/batches/' + encodeURIComponent(id) + '/release-check'),

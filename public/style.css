@@ -234,6 +234,8 @@ tr.row-detail > td { background: #f7fbfc; border-bottom: 1px solid var(--line); 
 .cond-list li:last-child { border-bottom: none; }
 .cond-text { flex: 1 1 auto; }
 .cond-meta { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cond-verdict { display: block; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 13px; }
+.cond-verdict .cond-meta { display: block; margin-top: 4px; }
 
 /* 指标卡 */
 .cards {

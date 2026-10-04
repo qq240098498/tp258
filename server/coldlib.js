@@ -104,17 +104,30 @@ function probeValidOn(probe, day) {
 
 function expiredProbes(data, batchId, day) {
   const rows = effectiveRecords(data, batchId);
-  const bad = [];
+  const found = {};
   for (const row of rows) {
     const probe = probeOf(data, row.probeId);
     if (!probe) continue;
     if (!probeValidOn(probe, String(row.at).slice(0, 10))) {
-      if (!bad.some((b) => b.probeCode === probe.code)) {
-        bad.push({ probeId: probe.id, probeCode: probe.code, calibratedUntil: probe.calibratedUntil, at: row.at });
+      let item = found[probe.id];
+      if (!item) {
+        item = {
+          probeId: probe.id,
+          probeCode: probe.code,
+          calibratedUntil: probe.calibratedUntil,
+          at: row.at,
+          from: row.at,
+          to: row.at,
+          count: 0,
+        };
+        found[probe.id] = item;
       }
+      // rows 已按时刻升序，首条即起、末条即止
+      item.to = row.at;
+      item.count += 1;
     }
   }
-  return bad;
+  return Object.keys(found).map((id) => found[id]);
 }
 
 // 累计超限时长：按批次周期累计，跨月不重置
@@ -141,6 +154,9 @@ function releaseCheck(data, batch) {
     { key: 'longest', ok: stats.longestMinutes <= Number(settings.allowExcursionMinutes), value: stats.longestMinutes, limit: Number(settings.allowExcursionMinutes), text: '单次连续超限不超过 ' + settings.allowExcursionMinutes + ' 分钟' },
     { key: 'total', ok: accumulated <= Number(settings.allowTotalExcursionMinutes), value: accumulated, limit: Number(settings.allowTotalExcursionMinutes), text: '累计超限不超过 ' + settings.allowTotalExcursionMinutes + ' 分钟' },
     { key: 'chain', ok: chain.gapCount === 0, value: chain.gapCount, limit: 0, text: '全程没有断链' },
+    // 第四条：参与判定的探头都要在校准有效期内。过期探头的记录不剔除（剔除只适用于口径第 7 条的停用探头），
+    // 只要有一条记录来自已过校准期的探头，本批直接不满足放行条件。
+    { key: 'calibration', ok: expired.length === 0, value: expired.length, limit: 0, text: '参与判定的探头都在校准有效期内' },
   ];
   return {
     mkt: mktCelsius(data, batch.id),
@@ -151,9 +167,13 @@ function releaseCheck(data, batch) {
     lastAt: stats.lastAt,
     chain,
     expiredProbes: expired,
+    noRecords: stats.recordCount === 0,
     conditions,
-    pass: conditions.every((c) => c.ok),
-    failed: conditions.filter((c) => !c.ok).map((c) => c.key),
+    // 四条同时满足，且没有任何温度记录的批次直接不能放行（口径第 6 条附加否决）
+    pass: stats.recordCount > 0 && conditions.every((c) => c.ok),
+    failed: []
+      .concat(stats.recordCount === 0 ? ['no-record'] : [])
+      .concat(conditions.filter((c) => !c.ok).map((c) => c.key)),
   };
 }
 
