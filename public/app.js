@@ -424,17 +424,20 @@ function batchDetailRow(b) {
   }).join('') || '<tr><td colspan="4" class="empty">没有断链缺口</td></tr>';
 
   const check = d.releaseCheck || {};
-  const conds = (check.conditions || []).slice();
+  const conds = check.conditions || [];
   const expired = check.expiredProbes || [];
-  conds.push({ key: 'calibration', ok: expired.length === 0, value: expired.length, limit: 0, text: '参与判定的探头都在校准有效期内' });
+  const gateBanner = check.hasRecords === false
+    ? '<div class="detail-note">' + esc(check.recordGateText || '没有任何温度记录的批次不能放行') + '</div>'
+    : '';
   const condHtml = conds.map(function (c) {
     return '<li><span class="cond-text">' + okPill(c.ok) + ' ' + esc(c.text) + '</span>' +
       '<span class="cond-meta">实际 ' + esc(c.value) + '，阈值 ' + esc(c.limit) + '</span></li>';
   }).join('');
 
   const expiredProbes = expired.map(function (p) {
-    return '<tr><td>' + esc(p.probeCode) + '</td><td>' + esc(p.calibratedUntil) + '</td><td>' + esc(p.at) + '</td></tr>';
-  }).join('') || '<tr><td colspan="3" class="empty">没有已过校准期的探头</td></tr>';
+    return '<tr><td>' + esc(p.probeCode) + '</td><td>' + esc(p.calibratedUntil) + '</td>' +
+      '<td>' + esc(p.firstAt) + ' ～ ' + esc(p.lastAt) + '</td><td class="num">' + num(p.recordCount) + '</td></tr>';
+  }).join('') || '<tr><td colspan="4" class="empty">参与判定的探头均在校准有效期内</td></tr>';
 
   const releases = (d.releases || []).map(function (r) {
     return '<tr><td>' + esc(r.decision) + '</td><td>' + esc(r.decidedAt) + '</td><td>' + esc(r.decider) + '</td>' +
@@ -454,9 +457,12 @@ function batchDetailRow(b) {
     '<div class="detail-block"><h4>超限段（' + (d.segments || []).length + '）</h4>' + segmentsHtml +
     '<h4>断链缺口（' + (d.chainGaps || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>起</th><th>止</th><th class="num">实际(分)</th><th class="num">计入(分)</th></tr></thead><tbody>' + gaps + '</tbody></table></div>' +
-    '<div class="detail-block"><h4>放行判定</h4><ul class="cond-list">' + condHtml + '</ul>' +
-    '<h4>已过校准期的探头（' + expired.length + '）</h4>' +
-    '<table class="mini-table"><thead><tr><th>探头</th><th>校准有效期</th><th>记录时刻</th></tr></thead><tbody>' + expiredProbes + '</tbody></table></div>' +
+    '<div class="detail-block"><h4>放行判定（' + conds.length + ' 条）' + (check.pass ? pill('满足放行条件', 'pill-ok') : pill('未满足放行条件', 'pill-bad')) + '</h4>' +
+    gateBanner +
+    '<ul class="cond-list">' + condHtml + '</ul>' +
+    '<h4>参与判定的过期探头（' + expired.length + '）</h4>' +
+    '<table class="mini-table"><thead><tr><th>探头</th><th>校准有效期</th><th>参与记录时段</th><th class="num">记录条数</th></tr></thead><tbody>' + expiredProbes + '</tbody></table>' +
+    '<div class="field-hint">口径：参与判定记录中存在过期探头时该条不满足、整批不予放行；记录不剔除，仍照常参与超限、断链与 MKT 计算并列出时段。</div></div>' +
     '<div class="detail-block"><h4>放行记录（' + (d.releases || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>决定</th><th>时刻</th><th>经办人</th><th class="num">MKT</th><th>依据</th></tr></thead><tbody>' + releases + '</tbody></table>' +
     decisionBtns + '</div>' +

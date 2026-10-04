@@ -16,12 +16,14 @@ function probeOf(data, probeId) {
   return data.probes.find((p) => p.id === probeId) || null;
 }
 
-// 同一探头同一时刻既有自动记录又有手工更正时，以手工为准
+// 同一探头同一时刻既有自动记录又有手工更正时，以手工为准；停用探头名下的记录不参与判定
 function effectiveRecords(data, batchId) {
   const rows = recordsOfBatch(data, batchId);
   const picked = {};
   const order = [];
   for (const row of rows) {
+    const probe = probeOf(data, row.probeId);
+    if (probe && probe.status === '停用') continue;
     const key = row.probeId + '|' + row.at;
     if (picked[key] === undefined) {
       picked[key] = row;
@@ -29,7 +31,7 @@ function effectiveRecords(data, batchId) {
       continue;
     }
     const current = picked[key];
-    if (current.source === '人工' && row.source === '自动') picked[key] = row;
+    if (current.source === '自动' && row.source === '人工') picked[key] = row;
   }
   return order.map((key) => picked[key]);
 }
@@ -102,19 +104,35 @@ function probeValidOn(probe, day) {
   return String(day) <= String(probe.calibratedUntil);
 }
 
-function expiredProbes(data, batchId, day) {
+// 参与判定的记录里，哪些探头在记录发生时已过校准有效期；按探头汇总记录时段与条数
+function expiredProbes(data, batchId) {
   const rows = effectiveRecords(data, batchId);
-  const bad = [];
+  const byProbe = {};
+  const order = [];
   for (const row of rows) {
     const probe = probeOf(data, row.probeId);
     if (!probe) continue;
-    if (!probeValidOn(probe, String(row.at).slice(0, 10))) {
-      if (!bad.some((b) => b.probeCode === probe.code)) {
-        bad.push({ probeId: probe.id, probeCode: probe.code, calibratedUntil: probe.calibratedUntil, at: row.at });
-      }
+    const day = String(row.at).slice(0, 10);
+    if (probeValidOn(probe, day)) continue;
+    let item = byProbe[probe.id];
+    if (!item) {
+      item = {
+        probeId: probe.id,
+        probeCode: probe.code,
+        calibratedUntil: probe.calibratedUntil,
+        firstAt: row.at,
+        lastAt: row.at,
+        at: row.at,
+        recordCount: 0,
+      };
+      byProbe[probe.id] = item;
+      order.push(probe.id);
     }
+    if (row.at < item.firstAt) item.firstAt = row.at;
+    if (row.at > item.lastAt) item.lastAt = row.at;
+    item.recordCount += 1;
   }
-  return bad;
+  return order.map((id) => byProbe[id]);
 }
 
 // 累计超限时长：按批次周期累计，跨月不重置
@@ -130,18 +148,21 @@ function monthlyExcursionMinutes(data, batchId) {
   return segmentStats(scoped, data.settings).totalMinutes;
 }
 
-// 放行判定：最长超限、累计超限、断链、探头校准四条
+// 放行判定：最长超限、累计超限、断链、探头校准四条；没有任何参与判定记录的批次不能放行
 function releaseCheck(data, batch) {
   const settings = data.settings;
   const stats = excursionStats(data, batch.id);
   const chain = chainGaps(data, batch.id);
-  const accumulated = monthlyExcursionMinutes(data, batch.id);
-  const expired = expiredProbes(data, batch.id, batch.loadedAt ? String(batch.loadedAt).slice(0, 10) : '');
+  const accumulated = accumulatedExcursionMinutes(data, batch.id);
+  const expired = expiredProbes(data, batch.id);
   const conditions = [
     { key: 'longest', ok: stats.longestMinutes <= Number(settings.allowExcursionMinutes), value: stats.longestMinutes, limit: Number(settings.allowExcursionMinutes), text: '单次连续超限不超过 ' + settings.allowExcursionMinutes + ' 分钟' },
     { key: 'total', ok: accumulated <= Number(settings.allowTotalExcursionMinutes), value: accumulated, limit: Number(settings.allowTotalExcursionMinutes), text: '累计超限不超过 ' + settings.allowTotalExcursionMinutes + ' 分钟' },
     { key: 'chain', ok: chain.gapCount === 0, value: chain.gapCount, limit: 0, text: '全程没有断链' },
+    { key: 'calibration', ok: expired.length === 0, value: expired.length, limit: 0, text: '参与判定的探头都在校准有效期内' },
   ];
+  // 无记录闸门：没有任何参与判定的记录（含记录全在停用探头名下）时，四条不展开判定，直接不能放行
+  const hasRecords = stats.recordCount > 0;
   return {
     mkt: mktCelsius(data, batch.id),
     longestMinutes: stats.longestMinutes,
@@ -152,8 +173,10 @@ function releaseCheck(data, batch) {
     chain,
     expiredProbes: expired,
     conditions,
-    pass: conditions.every((c) => c.ok),
-    failed: conditions.filter((c) => !c.ok).map((c) => c.key),
+    hasRecords,
+    recordGateText: hasRecords ? '' : '没有任何温度记录的批次不能放行',
+    pass: hasRecords && conditions.every((c) => c.ok),
+    failed: hasRecords ? conditions.filter((c) => !c.ok).map((c) => c.key) : ['no-records'],
   };
 }
 
